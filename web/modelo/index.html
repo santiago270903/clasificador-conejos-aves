@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conejo o Ave</title>
+  <style>
+    :root {
+      --fondo: #f6f4ef; --tarjeta: #ffffff; --texto: #1f2328; --suave: #636c76;
+      --borde: #d8d4cc; --conejo: #b5651d; --ave: #1f6feb; --acento: #2d6a4f;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --fondo: #15171a; --tarjeta: #1e2125; --texto: #e6e6e6; --suave: #9aa4ae;
+              --borde: #33373d; --conejo: #e3a15c; --ave: #6ea8fe; --acento: #74c69d; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--fondo); color: var(--texto);
+           font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+    h1 { font-size: 1.8rem; margin: 0 0 4px; }
+    .sub { color: var(--suave); margin: 0 0 20px; }
+    .tarjeta { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 14px; padding: 16px; }
+    .visor { position: relative; width: 100%; aspect-ratio: 1 / 1; background: #000; border-radius: 10px; overflow: hidden; }
+    .visor video, .visor img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .visor img { display: none; }
+    .estado { position: absolute; inset: 0; display: grid; place-items: center; color: #fff;
+              font-size: .95rem; text-align: center; padding: 20px; }
+    .botones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    button, label.boton { font: inherit; border: 1px solid var(--borde); background: var(--tarjeta); color: var(--texto);
+             padding: 9px 14px; border-radius: 9px; cursor: pointer; }
+    button.principal { background: var(--acento); border-color: var(--acento); color: #fff; }
+    button:disabled { opacity: .5; cursor: default; }
+    input[type=file] { display: none; }
+    .resultado { margin-top: 16px; }
+    .etiqueta { font-size: 2rem; font-weight: 700; min-height: 2.6rem; }
+    .barra { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--borde); margin: 8px 0 4px; }
+    .barra div { transition: width .25s ease; }
+    .leyenda { display: flex; justify-content: space-between; font-size: .9rem; color: var(--suave); font-variant-numeric: tabular-nums; }
+    .detalle { display: flex; gap: 16px; align-items: center; margin-top: 14px; color: var(--suave); font-size: .85rem; }
+    #entradaModelo { width: 100px; height: 100px; image-rendering: pixelated; border: 1px solid var(--borde); border-radius: 6px; flex: none; }
+    footer { margin-top: 24px; font-size: .8rem; color: var(--suave); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>🐇 ¿Conejo o ave? 🐦</h1>
+  <p class="sub">Red neuronal convolucional entrenada con Python y TensorFlow, ejecutándose en tu navegador con TensorFlow.js.</p>
+
+  <section class="tarjeta">
+    <div class="visor">
+      <video id="video" autoplay playsinline muted></video>
+      <img id="foto" alt="Foto cargada">
+      <div class="estado" id="estado">Cargando el modelo…</div>
+    </div>
+
+    <div class="botones">
+      <button class="principal" id="btnCamara" disabled>Usar cámara</button>
+      <button id="btnCambiar" disabled>Cambiar cámara</button>
+      <label class="boton" for="archivo">Subir foto</label>
+      <input type="file" id="archivo" accept="image/*">
+    </div>
+
+    <div class="resultado">
+      <div class="etiqueta" id="etiqueta">—</div>
+      <div class="barra"><div id="barraAve" style="width:50%;background:var(--ave)"></div><div id="barraConejo" style="width:50%;background:var(--conejo)"></div></div>
+      <div class="leyenda"><span id="pAve">Ave —</span><span id="pConejo">Conejo —</span></div>
+      <div class="detalle">
+        <canvas id="entradaModelo" width="100" height="100"></canvas>
+        <span>Esto es lo que "ve" el modelo: la imagen recortada al centro, reducida a 100×100 píxeles y en escala de grises, igual que en el entrenamiento.</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>Proyecto académico — Universidad de Caldas. Basado en el tutorial de clasificador de perros y gatos del canal Ringa Tech.</footer>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script>
+  const TAMANO = 100;
+  const video = document.getElementById("video");
+  const foto = document.getElementById("foto");
+  const estado = document.getElementById("estado");
+  const lienzo = document.getElementById("entradaModelo");
+  const ctx = lienzo.getContext("2d", { willReadFrequently: true });
+
+  let modelo = null;
+  let flujo = null;
+  let modoCamara = "environment";   // trasera por defecto en el celular
+  let bucleActivo = false;
+
+  async function cargarModelo() {
+    try {
+      modelo = await tf.loadLayersModel("modelo/model.json");
+      tf.tidy(() => modelo.predict(tf.zeros([1, TAMANO, TAMANO, 1])));   // calentamiento
+      estado.textContent = "Modelo listo. Usa la cámara o sube una foto.";
+      document.getElementById("btnCamara").disabled = false;
+    } catch (e) {
+      estado.textContent = "No se pudo cargar modelo/model.json. Abre la página con un servidor (python -m http.server) y no como archivo.";
+      console.error(e);
+    }
+  }
+
+  // Dibuja el centro cuadrado de la fuente en 100x100 y lo convierte en tensor gris 0-1
+  function prepararEntrada(fuente, ancho, alto) {
+    const lado = Math.min(ancho, alto);
+    ctx.drawImage(fuente, (ancho - lado) / 2, (alto - lado) / 2, lado, lado, 0, 0, TAMANO, TAMANO);
+    const datos = ctx.getImageData(0, 0, TAMANO, TAMANO).data;
+    const gris = new Float32Array(TAMANO * TAMANO);
+    for (let i = 0; i < gris.length; i++) {
+      const r = datos[i * 4], g = datos[i * 4 + 1], b = datos[i * 4 + 2];
+      gris[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255;   // misma fórmula que tf.image.rgb_to_grayscale
+      datos[i * 4] = datos[i * 4 + 1] = datos[i * 4 + 2] = gris[i] * 255;
+    }
+    ctx.putImageData(new ImageData(datos, TAMANO, TAMANO), 0, 0);
+    return tf.tensor4d(gris, [1, TAMANO, TAMANO, 1]);
+  }
+
+  function clasificar(fuente, ancho, alto) {
+    if (!modelo || !ancho || !alto) return;
+    const pConejo = tf.tidy(() => modelo.predict(prepararEntrada(fuente, ancho, alto)).dataSync()[0]);
+    const pAve = 1 - pConejo;
+    document.getElementById("etiqueta").textContent = pConejo > 0.5 ? "🐇 Conejo" : "🐦 Ave";
+    document.getElementById("barraAve").style.width = (pAve * 100) + "%";
+    document.getElementById("barraConejo").style.width = (pConejo * 100) + "%";
+    document.getElementById("pAve").textContent = "Ave " + (pAve * 100).toFixed(1) + " %";
+    document.getElementById("pConejo").textContent = "Conejo " + (pConejo * 100).toFixed(1) + " %";
+  }
+
+  function bucle() {
+    if (!bucleActivo) return;
+    if (video.readyState >= 2) clasificar(video, video.videoWidth, video.videoHeight);
+    setTimeout(() => requestAnimationFrame(bucle), 150);
+  }
+
+  async function iniciarCamara() {
+    detenerCamara();
+    try {
+      flujo = await navigator.mediaDevices.getUserMedia({ video: { facingMode: modoCamara }, audio: false });
+      video.srcObject = flujo;
+      foto.style.display = "none";
+      video.style.display = "block";
+      estado.textContent = "";
+      document.getElementById("btnCambiar").disabled = false;
+      bucleActivo = true;
+      bucle();
+    } catch (e) {
+      estado.textContent = "No se pudo abrir la cámara (" + e.name + "). En el celular se necesita HTTPS. Puedes subir una foto.";
+    }
+  }
+
+  function detenerCamara() {
+    bucleActivo = false;
+    if (flujo) flujo.getTracks().forEach(t => t.stop());
+    flujo = null;
+  }
+
+  document.getElementById("btnCamara").onclick = iniciarCamara;
+  document.getElementById("btnCambiar").onclick = () => {
+    modoCamara = modoCamara === "environment" ? "user" : "environment";
+    iniciarCamara();
+  };
+  document.getElementById("archivo").onchange = (ev) => {
+    const archivo = ev.target.files[0];
+    if (!archivo) return;
+    detenerCamara();
+    document.getElementById("btnCambiar").disabled = true;
+    foto.onload = () => {
+      video.style.display = "none";
+      foto.style.display = "block";
+      estado.textContent = "";
+      clasificar(foto, foto.naturalWidth, foto.naturalHeight);
+    };
+    foto.src = URL.createObjectURL(archivo);
+  };
+
+  cargarModelo();
+</script>
+</body>
+</html>
