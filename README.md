@@ -11,7 +11,7 @@ Réplica del tutorial **"Crea un clasificador de perros y gatos con IA, Python y
 ├── clasificador_conejos_aves.ipynb   # Notebook de Google Colab: datos, entrenamiento, evaluación y exportación
 ├── web/
 │   ├── index.html                    # Página que clasifica con la cámara o con una foto (TensorFlow.js)
-│   └── modelo/                       # Modelo exportado (model.json + group1-shard1of1.bin)
+│   └── modelo/                       # Modelo exportado (model.json + group1-shard1of1.bin): MobileNetV2 con transfer learning
 └── README.md
 ```
 
@@ -109,10 +109,9 @@ Las gráficas de precisión por época, la matriz de confusión y ejemplos de pr
 **Causa 2: el modelo entrenado desde cero aprendió poco.** Aun con el preprocesamiento corregido, la foto seguía quedando del lado de "Ave". 840 imágenes de 32×32 en gris no alcanzan para que una red entrenada desde cero generalice a fotos reales.
 *Corrección en el notebook (sección 14):* un cuarto modelo con **transfer learning**. MobileNetV2 preentrenada con ImageNet se usa congelada como extractor de características, y solo se entrena una capa de salida nueva. Usa imágenes a color de 96×96 y la misma división de datos. Los resultados de este modelo se ven en la sección 14 del notebook después de ejecutarlo; la sección 14.1 permite probar los dos modelos con fotos reales.
 
-**Cómo activar el modelo nuevo en la página.** La página detecta sola el tamaño de entrada del modelo (100×100 gris o 96×96 a color), así que no hay que cambiar el código:
+**Resultado.** La página ya usa el modelo con transfer learning (`web/modelo/`). Con la misma foto del conejo que antes daba *Ave 75 %*, ahora da **Conejo 98,8 %**. Las métricas del modelo sobre el conjunto de prueba están en la sección 14 del notebook.
 
-1. Ejecutar el notebook en Colab. Al final de la sección 14 se descarga `modelo_tl_tfjs.zip`.
-2. Reemplazar `web/modelo/model.json` y `web/modelo/group1-shard1of1.bin` por los dos archivos de ese zip.
+**Cambiar de modelo en la página.** La página detecta sola el tamaño de entrada del modelo (100×100 gris o 96×96 a color), así que no hay que cambiar el código: basta con reemplazar `web/modelo/model.json` y `web/modelo/group1-shard1of1.bin` por los del modelo que se quiera usar (`modelo_tfjs` de la sección 13 o `modelo_tl_tfjs` de la sección 14).
 
 ## Limitaciones
 
