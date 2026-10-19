@@ -66,7 +66,7 @@
       <div class="leyenda"><span id="pAve">Ave —</span><span id="pConejo">Conejo —</span></div>
       <div class="detalle">
         <canvas id="entradaModelo" width="100" height="100"></canvas>
-        <span>Esto es lo que "ve" el modelo: la imagen recortada al centro, reducida a 100×100 píxeles y en escala de grises, igual que en el entrenamiento.</span>
+        <span>Esto es lo que "ve" el modelo: el centro de la imagen reducido a 32×32 píxeles (la resolución de las fotos de entrenamiento) y ampliado de nuevo, igual que en el notebook.</span>
       </div>
     </div>
   </section>
@@ -76,14 +76,22 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 <script>
-  const TAMANO = 100;
+  // Las imágenes de entrenamiento (CIFAR) miden 32x32 y el notebook las amplía al tamaño del modelo.
+  // Para que el modelo reciba en el navegador lo mismo que vio al entrenar, cada foto se reduce
+  // primero a 32x32 y luego se amplía con interpolación bilineal, igual que tf.image.resize.
+  const TAMANO_ORIGEN = 32;
   const video = document.getElementById("video");
   const foto = document.getElementById("foto");
   const estado = document.getElementById("estado");
   const lienzo = document.getElementById("entradaModelo");
-  const ctx = lienzo.getContext("2d", { willReadFrequently: true });
+
+  // Lienzos auxiliares para reducir la imagen por pasos (evita el "aliasing" de reducir de golpe)
+  const lienzoTrabajo = document.createElement("canvas");
+  const lienzoOrigen = document.createElement("canvas");
+  lienzoOrigen.width = lienzoOrigen.height = TAMANO_ORIGEN;
 
   let modelo = null;
+  let alto = 100, ancho = 100, canales = 1;   // se leen del modelo al cargarlo
   let flujo = null;
   let modoCamara = "environment";   // trasera por defecto en el celular
   let bucleActivo = false;
@@ -91,7 +99,9 @@
   async function cargarModelo() {
     try {
       modelo = await tf.loadLayersModel("modelo/model.json");
-      tf.tidy(() => modelo.predict(tf.zeros([1, TAMANO, TAMANO, 1])));   // calentamiento
+      [, alto, ancho, canales] = modelo.inputs[0].shape;   // p. ej. [null,100,100,1] o [null,96,96,3]
+      lienzo.width = ancho; lienzo.height = alto;
+      tf.tidy(() => modelo.predict(tf.zeros([1, alto, ancho, canales])));   // calentamiento
       estado.textContent = "Modelo listo. Usa la cámara o sube una foto.";
       document.getElementById("btnCamara").disabled = false;
     } catch (e) {
@@ -100,26 +110,53 @@
     }
   }
 
-  // Dibuja el centro cuadrado de la fuente en 100x100 y lo convierte en tensor gris 0-1
-  function prepararEntrada(fuente, ancho, alto) {
-    const lado = Math.min(ancho, alto);
-    ctx.drawImage(fuente, (ancho - lado) / 2, (alto - lado) / 2, lado, lado, 0, 0, TAMANO, TAMANO);
-    const datos = ctx.getImageData(0, 0, TAMANO, TAMANO).data;
-    const gris = new Float32Array(TAMANO * TAMANO);
-    for (let i = 0; i < gris.length; i++) {
-      const r = datos[i * 4], g = datos[i * 4 + 1], b = datos[i * 4 + 2];
-      gris[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255;   // misma fórmula que tf.image.rgb_to_grayscale
-      datos[i * 4] = datos[i * 4 + 1] = datos[i * 4 + 2] = gris[i] * 255;
+  // Recorta el centro cuadrado y lo reduce a 32x32 dividiendo a la mitad en cada paso
+  function reducirA32(fuente, anchoFuente, altoFuente) {
+    let lado = Math.min(anchoFuente, altoFuente);
+    let sx = (anchoFuente - lado) / 2, sy = (altoFuente - lado) / 2;
+    let origen = fuente;
+    while (lado / 2 >= TAMANO_ORIGEN * 2) {
+      const mitad = Math.floor(lado / 2);
+      const temp = document.createElement("canvas");
+      temp.width = temp.height = mitad;
+      const c = temp.getContext("2d");
+      c.imageSmoothingQuality = "high";
+      c.drawImage(origen, sx, sy, lado, lado, 0, 0, mitad, mitad);
+      origen = temp; sx = 0; sy = 0; lado = mitad;
     }
-    ctx.putImageData(new ImageData(datos, TAMANO, TAMANO), 0, 0);
-    return tf.tensor4d(gris, [1, TAMANO, TAMANO, 1]);
+    const c32 = lienzoOrigen.getContext("2d", { willReadFrequently: true });
+    c32.imageSmoothingQuality = "high";
+    c32.drawImage(origen, sx, sy, lado, lado, 0, 0, TAMANO_ORIGEN, TAMANO_ORIGEN);
+    return lienzoOrigen;
   }
 
-  function clasificar(fuente, ancho, alto) {
-    if (!modelo || !ancho || !alto) return;
-    const pConejo = tf.tidy(() => modelo.predict(prepararEntrada(fuente, ancho, alto)).dataSync()[0]);
+  // Mismo preprocesamiento del notebook: 32x32 -> tamaño del modelo (bilineal) -> gris 0-1 o RGB 0-255
+  function prepararEntrada(fuente, anchoFuente, altoFuente) {
+    return tf.tidy(() => {
+      const rgb = tf.browser.fromPixels(reducirA32(fuente, anchoFuente, altoFuente)).toFloat();   // 0-255
+      const ampliada = tf.image.resizeBilinear(rgb, [alto, ancho], false, true);              // como tf.image.resize
+      let entrada, vista;   // vista = imagen 0-1 para mostrar en pantalla
+      if (canales === 1) {
+        // tf.image.rgb_to_grayscale usa estos pesos; luego se divide entre 255 como en el notebook
+        entrada = ampliada.mul(tf.tensor1d([0.2989, 0.5870, 0.1140])).sum(-1, true).div(255);
+        vista = entrada;
+      } else {
+        entrada = ampliada;            // el modelo con transfer learning normaliza adentro (capa Rescaling)
+        vista = ampliada.div(255);
+      }
+      return { entrada: entrada.expandDims(0), vista: vista.clipByValue(0, 1) };
+    });
+  }
+
+  function clasificar(fuente, anchoFuente, altoFuente) {
+    if (!modelo || !anchoFuente || !altoFuente) return;
+    const { entrada, vista } = prepararEntrada(fuente, anchoFuente, altoFuente);
+    const pConejo = tf.tidy(() => modelo.predict(entrada).dataSync()[0]);
+    entrada.dispose();
+    tf.browser.toPixels(vista, lienzo).then(() => vista.dispose());   // muestra lo que "ve" el modelo
     const pAve = 1 - pConejo;
-    document.getElementById("etiqueta").textContent = pConejo > 0.5 ? "🐇 Conejo" : "🐦 Ave";
+    const confianza = Math.max(pConejo, pAve);
+    document.getElementById("etiqueta").textContent = (pConejo > 0.5 ? "🐇 Conejo" : "🐦 Ave") + (confianza < 0.65 ? " (poca confianza)" : "");
     document.getElementById("barraAve").style.width = (pAve * 100) + "%";
     document.getElementById("barraConejo").style.width = (pConejo * 100) + "%";
     document.getElementById("pAve").textContent = "Ave " + (pAve * 100).toFixed(1) + " %";

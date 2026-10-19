@@ -27,6 +27,7 @@ Sigue los mismos pasos del video:
 6. **Aumento de datos** con `ImageDataGenerator` (rotación, desplazamiento, inclinación, zoom y volteo horizontal) y reentrenamiento de los tres modelos.
 7. **Comparación** con TensorBoard y gráficas de precisión, tabla de resultados y **matriz de confusión** del mejor modelo sobre el conjunto de prueba.
 8. **Exportación a TensorFlow.js** (`model.json` + pesos `.bin`) para la página web.
+9. **Mejora con transfer learning (sección 14).** MobileNetV2 preentrenada en ImageNet, a color y 96×96, para que la página funcione con fotos reales. Ver [Corrección: fotos reales](#corrección-el-modelo-decía-ave-con-fotos-reales).
 
 ## Cómo ejecutarlo
 
@@ -60,6 +61,8 @@ Abrir `http://localhost:8000`, presionar **Usar cámara** y apuntar a un conejo 
 | 85 % entrenamiento / 15 % validación | 70 / 15 / 15 con conjunto de prueba | Evaluar el modelo final con datos no vistos |
 | Conversión con `tensorflowjs_converter` | Función `exportar_tfjs` en el notebook (mismo formato *layers-model*) | El paquete `tensorflowjs` actual instala `tensorflow-decision-forests` y rompe el entorno de Colab |
 | Gris con promedio (R+G+B)/3 en la web | Gris con pesos 0.299/0.587/0.114 en entrenamiento **y** en la web | Que el modelo reciba lo mismo en el navegador que al entrenar |
+| La web reduce la foto directamente al tamaño del modelo | La web reduce la foto a 32×32 y luego la amplía | Las fotos de CIFAR miden 32×32; así la web imita lo que el modelo vio al entrenar |
+| — | Modelo adicional con *transfer learning* (MobileNetV2) | El modelo entrenado desde cero no generaliza a fotos reales |
 | — | Matriz de confusión y reporte de precisión/recall/F1 | Evaluación más completa |
 
 ## Resultados
@@ -96,9 +99,24 @@ A partir del recall, la matriz de confusión queda así: de 90 aves, 65 se clasi
 
 Las gráficas de precisión por época, la matriz de confusión y ejemplos de predicciones están en el notebook (secciones 10 y 11).
 
+## Corrección: el modelo decía "Ave" con fotos reales
+
+**Síntoma.** En la página web, casi cualquier foto real (incluso un conejo evidente) se clasificaba como "Ave". Con una foto de un conejo, la página marcaba *Ave 75 %*.
+
+**Causa 1: el navegador no preparaba las fotos igual que el entrenamiento.** El modelo entrenó con fotos de CIFAR de 32×32 ampliadas a 100×100, que se ven borrosas. La página reducía cada foto real directamente a 100×100, así que el modelo recibía imágenes mucho más nítidas que las de entrenamiento. Con esa diferencia, el modelo tiende a asociar el detalle fino (textura) con "ave".
+*Corrección en `web/index.html`:* la página recorta el centro, reduce la foto a 32×32 por pasos (para evitar *aliasing*), la amplía con interpolación bilineal (`tf.image.resizeBilinear` con *half pixel centers*, igual que `tf.image.resize`) y convierte a gris con los mismos pesos de `tf.image.rgb_to_grayscale`. Con la misma foto del conejo, la probabilidad de "Conejo" pasó de 25 % a 45 %, igual a la que da Python con el mismo preprocesamiento.
+
+**Causa 2: el modelo entrenado desde cero aprendió poco.** Aun con el preprocesamiento corregido, la foto seguía quedando del lado de "Ave". 840 imágenes de 32×32 en gris no alcanzan para que una red entrenada desde cero generalice a fotos reales.
+*Corrección en el notebook (sección 14):* un cuarto modelo con **transfer learning**. MobileNetV2 preentrenada con ImageNet se usa congelada como extractor de características, y solo se entrena una capa de salida nueva. Usa imágenes a color de 96×96 y la misma división de datos. Los resultados de este modelo se ven en la sección 14 del notebook después de ejecutarlo; la sección 14.1 permite probar los dos modelos con fotos reales.
+
+**Cómo activar el modelo nuevo en la página.** La página detecta sola el tamaño de entrada del modelo (100×100 gris o 96×96 a color), así que no hay que cambiar el código:
+
+1. Ejecutar el notebook en Colab. Al final de la sección 14 se descarga `modelo_tl_tfjs.zip`.
+2. Reemplazar `web/modelo/model.json` y `web/modelo/group1-shard1of1.bin` por los dos archivos de ese zip.
+
 ## Limitaciones
 
-Las imágenes de CIFAR son de 32×32 píxeles, así que el modelo aprende de fotos de muy baja resolución (se amplían a 100×100). Con fotos reales de la cámara puede equivocarse más que en el conjunto de prueba. Con más fotos propias y de mayor resolución (opción `USAR_CARPETA_PROPIA`) el modelo debería generalizar mejor.
+Las imágenes de CIFAR son de 32×32 píxeles, así que todos los modelos aprenden de fotos de muy baja resolución, y la página reduce las fotos reales a ese mismo tamaño. Esto limita lo que el modelo puede distinguir, sobre todo cuando el animal ocupa una parte pequeña de la foto: conviene que el conejo o el ave quede centrado y ocupe la mayor parte de la imagen. Con más fotos propias y de mayor resolución (opción `USAR_CARPETA_PROPIA`) los modelos deberían generalizar mejor.
 
 ## Créditos
 
